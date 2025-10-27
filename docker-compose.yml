@@ -1,0 +1,16 @@
+# docker-compose.yml para Coolify
+version: '3.8'
+services:
+  baileys-api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    volumes:
+      - baileys_auth:/app/auth_info
+    restart: unless-stopped
+
+volumes:
+  baileys_auth:
