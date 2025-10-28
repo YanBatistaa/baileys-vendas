@@ -1,14 +1,19 @@
 import express from 'express';
+import cors from 'cors';
 import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import { Boom } from '@hapi/boom';
+import pino from 'pino';
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 let sock = null;
 let qrCodeData = null;
 let isConnected = false;
+
+const logger = pino({ level: 'info' });
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -16,6 +21,7 @@ async function connectToWhatsApp() {
   sock = makeWASocket({
     auth: state,
     printQRInTerminal: true,
+    logger,
   });
 
   sock.ev.on('connection.update', async (update) => {
@@ -23,18 +29,19 @@ async function connectToWhatsApp() {
 
     if (qr) {
       qrCodeData = await QRCode.toDataURL(qr);
-      console.log('QR Code gerado!');
+      logger.info('QR Code gerado');
     }
 
     if (connection === 'close') {
       const shouldReconnect = (lastDisconnect?.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('Conexão fechada. Reconectando...', shouldReconnect);
+      logger.info(`Conexão fechada. Reconectando: ${shouldReconnect}`);
       if (shouldReconnect) {
-        connectToWhatsApp();
+        setTimeout(() => connectToWhatsApp(), 3000);
       }
       isConnected = false;
+      qrCodeData = null;
     } else if (connection === 'open') {
-      console.log('Conectado ao WhatsApp!');
+      logger.info('Conectado ao WhatsApp!');
       isConnected = true;
       qrCodeData = null;
     }
@@ -45,39 +52,53 @@ async function connectToWhatsApp() {
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
     if (!msg.key.fromMe && msg.message) {
-      console.log('Nova mensagem:', msg);
-      // Webhook aqui para notificar o Supabase
+      logger.info('Nova mensagem recebida');
+      // Aqui você pode enviar webhook para o Supabase
     }
   });
 }
 
-// API Endpoints
+// Rotas da API
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', connected: isConnected });
+});
+
 app.get('/qr', (req, res) => {
   if (qrCodeData) {
-    res.json({ qr: qrCodeData });
+    res.json({ qr: qrCodeData, status: 'qr_ready' });
   } else if (isConnected) {
-    res.json({ status: 'connected' });
+    res.json({ status: 'connected', qr: null });
   } else {
-    res.json({ status: 'connecting' });
+    res.json({ status: 'connecting', qr: null });
   }
 });
 
 app.post('/send', async (req, res) => {
   const { to, message } = req.body;
+  
+  if (!isConnected) {
+    return res.status(503).json({ error: 'WhatsApp não conectado' });
+  }
+
   try {
-    await sock.sendMessage(`${to}@s.whatsapp.net`, { text: message });
+    const formattedNumber = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
+    await sock.sendMessage(formattedNumber, { text: message });
     res.json({ success: true });
   } catch (error) {
+    logger.error(error);
     res.status(500).json({ error: error.message });
   }
 });
 
 app.get('/status', (req, res) => {
-  res.json({ connected: isConnected });
+  res.json({ 
+    connected: isConnected,
+    hasQR: !!qrCodeData 
+  });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Baileys API rodando na porta ${PORT}`);
+  logger.info(`Baileys API rodando na porta ${PORT}`);
   connectToWhatsApp();
 });
