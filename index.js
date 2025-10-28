@@ -59,9 +59,14 @@ async function connectToWhatsApp() {
 }
 
 // Rotas da API
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', connected: isConnected });
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    service: 'Baileys WhatsApp API',
+    connected: isConnected 
+  });
 });
+
 
 app.get('/qr', (req, res) => {
   if (qrCodeData) {
